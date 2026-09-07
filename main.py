@@ -334,8 +334,34 @@ async def extract_pdf_raw(
         ""
     ).lower()
 
-    # Allow PDF
-    if "application/pdf" in content_type:
+    upload: UploadFile | None = None
+
+    # Accept both raw attachment bytes and regular multipart uploads.
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        candidate = form.get("file") or form.get("attachment")
+        if not hasattr(candidate, "read") or not hasattr(candidate, "close"):
+            raise HTTPException(
+                status_code=400,
+                detail="Multipart request must include a 'file' or 'attachment' file.",
+            )
+        upload = candidate
+        upload_type = (upload.content_type or "").lower()
+        filename_suffix = Path(upload.filename or "").suffix.lower()
+        if "application/pdf" in upload_type or filename_suffix == ".pdf":
+            suffix = ".pdf"
+        elif "image/png" in upload_type or filename_suffix == ".png":
+            suffix = ".png"
+        elif "image/jpeg" in upload_type or filename_suffix in {".jpg", ".jpeg"}:
+            suffix = ".jpg"
+        else:
+            raise HTTPException(
+                status_code=415,
+                detail="Unsupported uploaded file. Expected PDF, PNG, or JPEG.",
+            )
+
+    # Allow raw PDF
+    elif "application/pdf" in content_type:
         suffix = ".pdf"
 
     # Optional image support
@@ -355,8 +381,10 @@ async def extract_pdf_raw(
             ),
         )
 
-    # Get raw attachment bytes
-    body = await request.body()
+    # Get raw attachment bytes or the uploaded multipart file.
+    body = await upload.read() if upload is not None else await request.body()
+    if upload is not None:
+        await upload.close()
 
     if not body:
         raise HTTPException(
